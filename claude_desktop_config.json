@@ -1,0 +1,26 @@
+{
+    "mcpServers": {
+        "health-tracker": {
+            "command": "uv",
+            "args": [
+                "--directory",
+                "C:/Users/Dell/OneDrive/Desktop/Projects at github/health-mcp",
+                "run",
+                "main.py"
+            ],
+            "metadata": {
+                "name": "Health Assistant",
+                "description": "Comprehensive health tracking - nutrition, sleep, exercise, weight management",
+                "version": "0.1.0",
+                "capabilities": [
+                    "nutrition_tracking",
+                    "sleep_analysis",
+                    "weight_management",
+                    "exercise_logging",
+                    "ai_recommendations",
+                    "pantry_management"
+                ]
+            }
+        }
+    }
+}

@@ -1,10 +1,44 @@
+"""
+Health MCP Server - Comprehensive Health Tracking with AI Recommendations
+
+This MCP server provides 28 tools for complete health management:
+- Nutrition tracking with 35+ foods (Indian & International)
+- Sleep quality analysis
+- Weight management with trends
+- Exercise logging with calorie estimates
+- Smart meal recommendations (region-aware, pantry-aware, time-aware)
+- User profile & goals management
+
+Perfect for LLM-driven health conversations: "I ate 2 rotis and dal" 
+→ Automatically logs nutrition, suggests next meal, tracks progress.
+"""
+
 from fastmcp import FastMCP
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-# Create a simple health MCP server
-mcp = FastMCP("Health Assistant")
+# Create health MCP server with detailed metadata
+mcp = FastMCP(
+    "Health Assistant",
+    instructions="""You are a comprehensive health tracking assistant. You help users:
+    
+1. Track nutrition by logging meals and analyzing daily intake
+2. Monitor sleep patterns and quality
+3. Manage weight with trends and goals
+4. Log exercises with calorie burn estimates
+5. Provide personalized recommendations based on:
+   - Daily calorie goals and consumption
+   - Sleep quality and energy levels
+   - Regional food preferences (India/International)
+   - Available pantry items
+   - Time-based food routines
+   
+When users describe what they ate, parse quantities and call log_meal().
+When recommending foods, consider their region, goals, and what's available.
+Always provide actionable insights and encourage healthy habits!
+"""
+)
 
 # Database setup
 DB_PATH = Path(__file__).parent / "health_data.db"
@@ -95,6 +129,40 @@ def init_database():
         )
     """)
     
+    # User pantry/inventory
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_pantry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_name TEXT NOT NULL,
+            available BOOLEAN DEFAULT 1,
+            quantity_grams REAL,
+            notes TEXT,
+            last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (food_name) REFERENCES food_database(name)
+        )
+    """)
+    
+    # Food routines - time-based food availability/preferences
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS food_routines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            food_name TEXT NOT NULL,
+            morning BOOLEAN DEFAULT 0,
+            midday BOOLEAN DEFAULT 0,
+            afternoon BOOLEAN DEFAULT 0,
+            evening BOOLEAN DEFAULT 0,
+            night BOOLEAN DEFAULT 0,
+            latenight BOOLEAN DEFAULT 0,
+            preparation_type TEXT,
+            effort_level TEXT,
+            typical_portion_grams REAL,
+            preference_score INTEGER DEFAULT 5,
+            notes TEXT,
+            last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (food_name) REFERENCES food_database(name)
+        )
+    """)
+    
     # Insert some common foods if table is empty
     cursor.execute("SELECT COUNT(*) FROM food_database")
     if cursor.fetchone()[0] == 0:
@@ -125,6 +193,18 @@ def init_database():
             ("dosa", 168, 4, 25, 6, 2),
             ("curd", 60, 3.5, 4.7, 3.3, 0),
             ("samosa", 252, 3.5, 23, 17, 2),
+            # Additional Indian/common foods for routines
+            ("bread", 265, 9, 49, 3.2, 2.7),
+            ("jam", 278, 0.4, 69, 0.1, 1),
+            ("poha", 110, 2, 23, 0.4, 2),
+            ("paratha", 320, 6, 40, 15, 3),
+            ("maggie", 400, 8, 60, 14, 2),
+            ("chowmein", 138, 4.5, 20, 4.5, 2),
+            ("fried rice", 130, 3, 20, 4, 1),
+            ("chana", 164, 9, 27, 3, 8),
+            ("ganne ka juice", 50, 0.2, 13, 0, 0),
+            ("pakora", 180, 3.5, 18, 11, 2),
+            ("cashews", 553, 18, 30, 44, 3.3),
         ]
         cursor.executemany(
             "INSERT INTO food_database (name, calories, protein, carbs, fats, fiber) VALUES (?, ?, ?, ?, ?, ?)",
@@ -709,12 +789,17 @@ def get_user_profile() -> str:
 # ==== SMART RECOMMENDATIONS ====
 
 @mcp.tool()
-def recommend_foods(meal_type: str = "lunch") -> str:
+def recommend_foods(meal_type: str = "lunch", pantry_only: bool = False) -> str:
     """Recommend foods based on daily calorie goal, what you've eaten today, and your region.
     
     Args:
         meal_type: "breakfast", "lunch", "dinner", or "snack"
+        pantry_only: If True, only recommend from foods in your pantry
     """
+    # If user wants pantry-only recommendations, use that tool
+    if pantry_only:
+        return recommend_from_pantry(meal_type)
+    
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -1024,5 +1109,618 @@ def get_daily_summary(date: str = None) -> str:
     conn.close()
     return result
 
+# ==== PANTRY MANAGEMENT TOOLS ====
+
+@mcp.tool()
+def add_to_pantry(food_name: str, quantity_grams: float = None, notes: str = "") -> str:
+    """Add food to your available pantry inventory.
+    
+    Args:
+        food_name: Name of food (must exist in food_database)
+        quantity_grams: Optional quantity available (in grams)
+        notes: Optional notes ("expires 10/25", "frozen", "need to buy more")
+    
+    Example: add_to_pantry("chicken breast", 500, "in freezer")
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Verify food exists in database
+    cursor.execute("SELECT name FROM food_database WHERE name = ?", (food_name.lower(),))
+    if not cursor.fetchone():
+        conn.close()
+        return f"⚠️ '{food_name}' not in food database. Add it first with add_food_to_database()"
+    
+    # Check if already in pantry
+    cursor.execute("SELECT id FROM user_pantry WHERE food_name = ?", (food_name.lower(),))
+    existing = cursor.fetchone()
+    
+    if existing:
+        # Update existing entry
+        cursor.execute("""
+            UPDATE user_pantry 
+            SET available = 1, quantity_grams = ?, notes = ?, last_updated = CURRENT_TIMESTAMP
+            WHERE food_name = ?
+        """, (quantity_grams, notes, food_name.lower()))
+        result = f"✓ Updated '{food_name}' in pantry"
+    else:
+        # Insert new entry
+        cursor.execute("""
+            INSERT INTO user_pantry (food_name, quantity_grams, notes)
+            VALUES (?, ?, ?)
+        """, (food_name.lower(), quantity_grams, notes))
+        result = f"✓ Added '{food_name}' to pantry"
+    
+    if quantity_grams:
+        result += f"\n  Quantity: {quantity_grams}g"
+    if notes:
+        result += f"\n  Notes: {notes}"
+    
+    conn.commit()
+    conn.close()
+    return result
+
+
+@mcp.tool()
+def remove_from_pantry(food_name: str) -> str:
+    """Remove food from your pantry (mark as unavailable)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM user_pantry WHERE food_name = ?", (food_name.lower(),))
+    
+    if cursor.rowcount > 0:
+        result = f"✓ Removed '{food_name}' from pantry"
+    else:
+        result = f"⚠️ '{food_name}' was not in your pantry"
+    
+    conn.commit()
+    conn.close()
+    return result
+
+
+@mcp.tool()
+def list_my_pantry() -> str:
+    """List all foods currently in your pantry with quantities and notes."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT p.food_name, p.quantity_grams, p.notes, p.last_updated,
+               f.calories, f.protein, f.carbs, f.fats
+        FROM user_pantry p
+        JOIN food_database f ON p.food_name = f.name
+        WHERE p.available = 1
+        ORDER BY p.last_updated DESC
+    """)
+    
+    items = cursor.fetchall()
+    conn.close()
+    
+    if not items:
+        return "🍽️ Your pantry is empty!\n💡 Add foods with: add_to_pantry()"
+    
+    result = "🍽️ Your Pantry Inventory:\n\n"
+    
+    for food, qty, notes, updated, cal, protein, carbs, fats in items:
+        result += f"• {food.title()}"
+        if qty:
+            result += f" ({qty}g available)"
+        result += f"\n  Nutrition (per 100g): {cal}cal, P:{protein}g, C:{carbs}g, F:{fats}g"
+        if notes:
+            result += f"\n  📝 {notes}"
+        result += f"\n  Last updated: {updated[:10]}\n\n"
+    
+    return result
+
+
+@mcp.tool()
+def recommend_from_pantry(meal_type: str = "lunch") -> str:
+    """Recommend meals using ONLY foods available in your pantry.
+    
+    Args:
+        meal_type: "breakfast", "lunch", "dinner", or "snack"
+    
+    This considers:
+    - Only foods in your pantry
+    - Your calorie goals and what you've eaten today
+    - Your region preferences
+    - Available quantities (warns if insufficient)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Get user profile
+    cursor.execute("SELECT daily_calorie_goal, region FROM user_profile ORDER BY id DESC LIMIT 1")
+    profile = cursor.fetchone()
+    
+    if not profile or not profile[0]:
+        conn.close()
+        return "❌ Please set your daily calorie goal first using set_user_profile()"
+    
+    cal_goal, region = profile
+    
+    # Get today's consumption
+    today = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("SELECT SUM(calories) FROM meals WHERE date = ?", (today,))
+    consumed = cursor.fetchone()[0] or 0
+    remaining = cal_goal - consumed
+    
+    # Get available pantry foods
+    cursor.execute("""
+        SELECT p.food_name, p.quantity_grams
+        FROM user_pantry p
+        WHERE p.available = 1
+    """)
+    
+    pantry_items = cursor.fetchall()
+    conn.close()
+    
+    if not pantry_items:
+        return "🍽️ Your pantry is empty! Add foods with add_to_pantry() first."
+    
+    result = f"🍽️ Meal Recommendations from YOUR PANTRY ({meal_type.title()}):\n\n"
+    result += f"📊 Today: {consumed:.0f}/{cal_goal:.0f} kcal consumed, {remaining:.0f} remaining\n\n"
+    
+    # Meal calorie targets
+    meal_targets = {
+        "breakfast": 0.25,
+        "lunch": 0.35,
+        "dinner": 0.30,
+        "snack": 0.10
+    }
+    target_cal = cal_goal * meal_targets.get(meal_type, 0.30)
+    result += f"🎯 Target for {meal_type}: ~{target_cal:.0f} kcal\n\n"
+    
+    result += "Available ingredients:\n"
+    for food, qty in pantry_items:
+        result += f"  • {food.title()}"
+        if qty:
+            result += f" ({qty}g)"
+        result += "\n"
+    
+    result += "\n💡 Suggested combinations:\n\n"
+    
+    # Generate meal combinations based on available foods
+    foods_dict = {food: qty for food, qty in pantry_items}
+    suggestions = []
+    
+    # Smart combination logic
+    if "chicken breast" in foods_dict and "brown rice" in foods_dict:
+        suggestions.append(("Protein Bowl", "chicken breast:150, brown rice:150", 
+                           "High protein balanced meal"))
+    
+    if "eggs" in foods_dict and "spinach" in foods_dict:
+        suggestions.append(("Healthy Omelette", "eggs:100, spinach:50",
+                           "Quick protein-rich option"))
+    
+    if "roti" in foods_dict and "dal" in foods_dict:
+        suggestions.append(("Traditional Indian", "roti:120, dal:100",
+                           "Balanced vegetarian meal"))
+    
+    if "oatmeal" in foods_dict:
+        banana_part = ", banana:100" if "banana" in foods_dict else ""
+        suggestions.append(("Oats Bowl", f"oatmeal:50{banana_part}",
+                           "Healthy breakfast"))
+    
+    if "pasta" in foods_dict and "chicken breast" in foods_dict:
+        suggestions.append(("Chicken Pasta", "pasta:100, chicken breast:100",
+                           "Balanced protein meal"))
+    
+    if "brown rice" in foods_dict and "dal" in foods_dict:
+        suggestions.append(("Rice & Dal", "brown rice:150, dal:100",
+                           "Complete protein vegetarian"))
+    
+    if not suggestions:
+        result += "⚠️ Not enough variety for meal suggestions.\n"
+        result += "Try combining what you have or add more foods to pantry!"
+    else:
+        for i, (name, foods, desc) in enumerate(suggestions, 1):
+            result += f"{i}. {name}: {desc}\n"
+            result += f"   Foods: {foods}\n"
+            result += f"   💡 Use: log_meal(\"{foods}\")\n\n"
+    
+    return result
+
+
+# ==================== FOOD ROUTINES MANAGEMENT ====================
+
+@mcp.tool()
+def add_to_food_routine(
+    food_name: str,
+    morning: bool = False,
+    midday: bool = False,
+    afternoon: bool = False,
+    evening: bool = False,
+    night: bool = False,
+    latenight: bool = False,
+    preparation_type: str = "",
+    effort_level: str = "easy",
+    typical_portion_grams: float = 100,
+    preference_score: int = 5,
+    notes: str = ""
+) -> str:
+    """Add food to your time-based routine (what you typically eat/cook at different times).
+    
+    Args:
+        food_name: Name of food (must exist in food_database)
+        morning: Available 6-10am (breakfast items like bread, poha, paratha)
+        midday: Available 10am-12pm (brunch/snacks)
+        afternoon: Available 12-3pm (lunch items like dal-rice, roti-sabzi)
+        evening: Available 4-7pm (evening snacks like maggie, chowmein, pakora)
+        night: Available 8-11pm (dinner items)
+        latenight: Available 11pm-6am (light snacks)
+        preparation_type: 'quick', 'cook', 'ready', 'snack'
+        effort_level: 'easy', 'medium', 'hard'
+        typical_portion_grams: Your usual portion size
+        preference_score: 1-10 how much you like this option
+        notes: Additional context
+    
+    Example: add_to_food_routine("maggie", evening=True, preparation="quick", effort="easy", portion=50)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Verify food exists in database
+    cursor.execute("SELECT name FROM food_database WHERE name = ?", (food_name.lower(),))
+    if not cursor.fetchone():
+        conn.close()
+        return f"⚠️ '{food_name}' not in food database. Add it first with add_food_to_database()"
+    
+    # Check if already in routines
+    cursor.execute("SELECT id FROM food_routines WHERE food_name = ?", (food_name.lower(),))
+    existing = cursor.fetchone()
+    
+    if existing:
+        # Update existing entry
+        cursor.execute("""
+            UPDATE food_routines 
+            SET morning = ?, midday = ?, afternoon = ?, evening = ?, night = ?, latenight = ?,
+                preparation_type = ?, effort_level = ?, typical_portion_grams = ?,
+                preference_score = ?, notes = ?, last_updated = CURRENT_TIMESTAMP
+            WHERE food_name = ?
+        """, (morning, midday, afternoon, evening, night, latenight,
+              preparation_type, effort_level, typical_portion_grams,
+              preference_score, notes, food_name.lower()))
+        result = f"✓ Updated '{food_name}' in routines"
+    else:
+        # Insert new entry
+        cursor.execute("""
+            INSERT INTO food_routines 
+            (food_name, morning, midday, afternoon, evening, night, latenight,
+             preparation_type, effort_level, typical_portion_grams, preference_score, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (food_name.lower(), morning, midday, afternoon, evening, night, latenight,
+              preparation_type, effort_level, typical_portion_grams, preference_score, notes))
+        result = f"✓ Added '{food_name}' to routines"
+    
+    # Show what times it's available
+    times = []
+    if morning: times.append("morning")
+    if midday: times.append("midday")
+    if afternoon: times.append("afternoon")
+    if evening: times.append("evening")
+    if night: times.append("night")
+    if latenight: times.append("latenight")
+    
+    if times:
+        result += f"\n  Available: {', '.join(times)}"
+    if preparation_type:
+        result += f"\n  Type: {preparation_type}"
+    if effort_level:
+        result += f"\n  Effort: {effort_level}"
+    result += f"\n  Portion: {typical_portion_grams}g"
+    result += f"\n  Preference: {preference_score}/10"
+    
+    conn.commit()
+    conn.close()
+    return result
+
+
+@mcp.tool()
+def remove_from_food_routine(food_name: str) -> str:
+    """Remove food from your routines."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM food_routines WHERE food_name = ?", (food_name.lower(),))
+    
+    if cursor.rowcount > 0:
+        result = f"✓ Removed '{food_name}' from routines"
+    else:
+        result = f"⚠️ '{food_name}' was not in your routines"
+    
+    conn.commit()
+    conn.close()
+    return result
+
+
+@mcp.tool()
+def view_food_routines(time_period: str = "all") -> str:
+    """View your food routines by time period.
+    
+    Args:
+        time_period: 'all', 'morning', 'midday', 'afternoon', 'evening', 'night', 'latenight'
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    if time_period == "all":
+        cursor.execute("""
+            SELECT r.food_name, r.morning, r.midday, r.afternoon, r.evening, r.night, r.latenight,
+                   r.preparation_type, r.effort_level, r.typical_portion_grams, r.preference_score,
+                   f.calories, f.protein, f.carbs, f.fats
+            FROM food_routines r
+            JOIN food_database f ON r.food_name = f.name
+            ORDER BY r.preference_score DESC, r.food_name
+        """)
+    else:
+        # Filter by specific time period
+        time_col = time_period.lower()
+        cursor.execute(f"""
+            SELECT r.food_name, r.preparation_type, r.effort_level, r.typical_portion_grams,
+                   r.preference_score, r.notes,
+                   f.calories, f.protein, f.carbs, f.fats
+            FROM food_routines r
+            JOIN food_database f ON r.food_name = f.name
+            WHERE r.{time_col} = 1
+            ORDER BY r.preference_score DESC, r.effort_level
+        """)
+    
+    items = cursor.fetchall()
+    conn.close()
+    
+    if not items:
+        return f"🍽️ No routines set for {time_period}!\n💡 Add with: add_to_food_routine()"
+    
+    result = f"🍽️ Your Food Routines ({time_period.title()}):\n\n"
+    
+    if time_period == "all":
+        for food, morn, mid, aft, eve, nig, late, prep, effort, portion, pref, cal, prot, carbs, fats in items:
+            result += f"• {food.title()} (preference: {pref}/10)\n"
+            times = []
+            if morn: times.append("morning")
+            if mid: times.append("midday")
+            if aft: times.append("afternoon")
+            if eve: times.append("evening")
+            if nig: times.append("night")
+            if late: times.append("latenight")
+            result += f"  Times: {', '.join(times)}\n"
+            result += f"  {prep} | {effort} effort | {portion}g portion\n"
+            result += f"  Nutrition: {cal}cal, P:{prot}g, C:{carbs}g, F:{fats}g (per 100g)\n\n"
+    else:
+        for food, prep, effort, portion, pref, notes, cal, prot, carbs, fats in items:
+            result += f"• {food.title()} (⭐{pref}/10)\n"
+            result += f"  {prep} | {effort} effort | {portion}g typical\n"
+            actual_cal = cal * portion / 100
+            result += f"  {actual_cal:.0f} cal per portion\n"
+            if notes:
+                result += f"  📝 {notes}\n"
+            result += "\n"
+    
+    return result
+
+
+@mcp.tool()
+def recommend_from_routines(
+    time_period: str = "current",
+    filter_by_effort: str = "all",
+    include_pantry: bool = True
+) -> str:
+    """Get food recommendations based on time-based routines and current goals.
+    
+    Args:
+        time_period: 'current' (auto-detect), 'morning', 'midday', 'afternoon', 'evening', 'night', 'latenight'
+        filter_by_effort: 'all', 'easy', 'medium', 'hard'
+        include_pantry: If True, also show foods from your pantry
+    
+    This considers:
+    - What you typically eat/cook at this time
+    - Your calorie goals and consumption today
+    - Preparation effort level
+    - Your preference scores
+    - What's in your pantry (if include_pantry=True)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Auto-detect time period if "current"
+    if time_period == "current":
+        hour = datetime.now().hour
+        if 6 <= hour < 10:
+            time_period = "morning"
+        elif 10 <= hour < 12:
+            time_period = "midday"
+        elif 12 <= hour < 16:
+            time_period = "afternoon"
+        elif 16 <= hour < 20:
+            time_period = "evening"
+        elif 20 <= hour < 23:
+            time_period = "night"
+        else:
+            time_period = "latenight"
+    
+    # Get user profile
+    cursor.execute("SELECT daily_calorie_goal, region FROM user_profile ORDER BY id DESC LIMIT 1")
+    profile = cursor.fetchone()
+    
+    if not profile or not profile[0]:
+        conn.close()
+        return "❌ Please set your daily calorie goal first using set_user_profile()"
+    
+    cal_goal, region = profile
+    
+    # Get today's consumption
+    today = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("SELECT SUM(calories) FROM meals WHERE date = ?", (today,))
+    consumed = cursor.fetchone()[0] or 0
+    remaining = cal_goal - consumed
+    
+    # Get routines for this time period
+    time_col = time_period.lower()
+    if filter_by_effort == "all":
+        cursor.execute(f"""
+            SELECT r.food_name, r.preparation_type, r.effort_level, r.typical_portion_grams,
+                   r.preference_score, r.notes,
+                   f.calories, f.protein, f.carbs, f.fats
+            FROM food_routines r
+            JOIN food_database f ON r.food_name = f.name
+            WHERE r.{time_col} = 1
+            ORDER BY r.preference_score DESC, r.effort_level
+        """)
+    else:
+        cursor.execute(f"""
+            SELECT r.food_name, r.preparation_type, r.effort_level, r.typical_portion_grams,
+                   r.preference_score, r.notes,
+                   f.calories, f.protein, f.carbs, f.fats
+            FROM food_routines r
+            JOIN food_database f ON r.food_name = f.name
+            WHERE r.{time_col} = 1 AND r.effort_level = ?
+            ORDER BY r.preference_score DESC
+        """, (filter_by_effort,))
+    
+    routine_items = cursor.fetchall()
+    
+    # Get pantry items if requested
+    pantry_items = []
+    if include_pantry:
+        cursor.execute("""
+            SELECT p.food_name, p.quantity_grams, f.calories, f.protein
+            FROM user_pantry p
+            JOIN food_database f ON p.food_name = f.name
+            WHERE p.available = 1
+        """)
+        pantry_items = cursor.fetchall()
+    
+    conn.close()
+    
+    # Build response
+    time_emoji = {
+        "morning": "🌅",
+        "midday": "☀️",
+        "afternoon": "🌤️",
+        "evening": "🌆",
+        "night": "🌙",
+        "latenight": "🌃"
+    }
+    
+    result = f"{time_emoji.get(time_period, '🍽️')} {time_period.title()} Food Options:\n\n"
+    result += f"📊 Today: {consumed:.0f}/{cal_goal:.0f} kcal | Remaining: {remaining:.0f} kcal\n\n"
+    
+    if not routine_items and not pantry_items:
+        result += f"⚠️ No routines set for {time_period}!\n"
+        result += "💡 Add foods with: add_to_food_routine()\n"
+        result += "💡 Or add to pantry with: add_to_pantry()"
+        return result
+    
+    # Group by effort level
+    if routine_items:
+        result += "**Your Usual Options:**\n\n"
+        
+        effort_groups = {"easy": [], "medium": [], "hard": []}
+        for food, prep, effort, portion, pref, notes, cal, prot, carbs, fats in routine_items:
+            if effort not in effort_groups:
+                effort = "easy"
+            effort_groups[effort].append((food, prep, portion, pref, notes, cal, prot))
+        
+        for effort_name, emoji in [("easy", "⚡"), ("medium", "🔥"), ("hard", "💪")]:
+            items = effort_groups.get(effort_name, [])
+            if items:
+                result += f"{emoji} **{effort_name.title()} Options:**\n"
+                for food, prep, portion, pref, notes, cal, prot in items:
+                    actual_cal = cal * portion / 100
+                    actual_prot = prot * portion / 100
+                    result += f"  • {food.title()} ({prep}) - {actual_cal:.0f} cal, {actual_prot:.1f}g protein\n"
+                    result += f"    {portion}g portion | ⭐{pref}/10"
+                    if notes:
+                        result += f" | {notes}"
+                    result += "\n"
+                result += "\n"
+    
+    # Add pantry suggestions
+    if pantry_items:
+        result += "**From Your Pantry:**\n"
+        for food, qty, cal, prot in pantry_items:
+            result += f"  • {food.title()}"
+            if qty:
+                result += f" ({qty}g available)"
+            result += f" - {cal}cal/100g\n"
+        result += "\n"
+    
+    # Add smart suggestion
+    result += "💡 **Smart Pick:** "
+    if routine_items:
+        best = routine_items[0]
+        food, prep, effort, portion, pref, notes, cal, prot, carbs, fats = best
+        actual_cal = cal * portion / 100
+        result += f"{food.title()} ({prep}, {effort}) = {actual_cal:.0f} cal"
+    
+    return result
+
+
+@mcp.tool()
+def bulk_setup_routines(morning_foods: str = "", evening_foods: str = "", afternoon_foods: str = "") -> str:
+    """Quick setup multiple foods for different times at once.
+    
+    Args:
+        morning_foods: Comma-separated food names for morning (e.g., "bread,poha,paratha")
+        evening_foods: Comma-separated food names for evening (e.g., "maggie,oats,chowmein")
+        afternoon_foods: Comma-separated food names for afternoon (e.g., "roti,dal,rice")
+    
+    Example: bulk_setup_routines(morning="bread,poha,paratha", evening="maggie,oats")
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    added = []
+    failed = []
+    
+    def add_foods(foods_str, time_col):
+        if not foods_str:
+            return
+        foods = [f.strip().lower() for f in foods_str.split(",")]
+        for food in foods:
+            if not food:
+                continue
+            # Check if food exists
+            cursor.execute("SELECT name FROM food_database WHERE name = ?", (food,))
+            if not cursor.fetchone():
+                failed.append(f"{food} (not in database)")
+                continue
+            
+            # Insert or update
+            cursor.execute("SELECT id FROM food_routines WHERE food_name = ?", (food,))
+            if cursor.fetchone():
+                cursor.execute(f"UPDATE food_routines SET {time_col} = 1 WHERE food_name = ?", (food,))
+            else:
+                cursor.execute(f"""
+                    INSERT INTO food_routines (food_name, {time_col})
+                    VALUES (?, 1)
+                """, (food,))
+            added.append(f"{food} ({time_col})")
+    
+    add_foods(morning_foods, "morning")
+    add_foods(afternoon_foods, "afternoon")
+    add_foods(evening_foods, "evening")
+    
+    conn.commit()
+    conn.close()
+    
+    result = "✓ Bulk routine setup complete!\n\n"
+    if added:
+        result += f"Added {len(added)} items:\n"
+        for item in added:
+            result += f"  • {item}\n"
+    if failed:
+        result += f"\n⚠️ Failed {len(failed)} items:\n"
+        for item in failed:
+            result += f"  • {item}\n"
+        result += "\nAdd missing foods with: add_food_to_database()"
+    
+    return result
+
+
 if __name__ == "__main__":
     mcp.run()
+
+

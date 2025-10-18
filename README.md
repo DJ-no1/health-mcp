@@ -1,8 +1,60 @@
 # Health MCP Server 🏥
 
-A comprehensive local MCP (Model Context Protocol) server for complete health tracking and personalized recommendations.
+A comprehensive **Model Context Protocol (MCP)** server for complete health tracking with AI-driven recommendations. Built with FastMCP.
 
-## ✨ Features
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![FastMCP](https://img.shields.io/badge/MCP-FastMCP-green.svg)](https://github.com/jlowin/fastmcp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+---
+
+## 🚀 Quick Start
+
+### Installation
+
+```bash
+# Clone or download this repository
+cd health-mcp
+
+# Install dependencies
+pip install fastmcp
+# OR using uv (recommended)
+uv pip install fastmcp
+```
+
+### Run the Server
+
+```bash
+python main.py
+```
+
+### Connect to Claude Desktop
+
+1. Find your Claude config file:
+
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+2. Add this configuration:
+
+```json
+{
+  "mcpServers": {
+    "health-tracker": {
+      "command": "python",
+      "args": ["C:/ABSOLUTE/PATH/TO/health-mcp/main.py"]
+    }
+  }
+}
+```
+
+3. Restart Claude Desktop
+
+4. **Test it:** Say "I ate 2 rotis and dal" - Claude will track your meal automatically! 🎉
+
+📖 **Detailed setup guide:** [MCP_SETUP.md](./MCP_SETUP.md)
+
+---
 
 ### 📊 Nutrition Tracking:
 
@@ -79,18 +131,44 @@ This is exactly what you asked for! The LLM can now:
    - Track progress over time
    - Maintain or reach your target weight
 
-## 💾 Database
+## � Documentation
 
-SQLite database (`health_data.db`) with:
+- **[MCP_SETUP.md](./MCP_SETUP.md)** - Complete setup guide for Claude Desktop, VS Code, and other MCP clients
+- **[TOOL_REFERENCE.md](./TOOL_REFERENCE.md)** - Detailed documentation of all 28 tools with examples
+- **[USAGE_GUIDE.md](./USAGE_GUIDE.md)** - Real-world usage scenarios and workflows
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Technical architecture and database schema
 
-- **food_database** - 23 foods (chicken, rice, dal, roti, paneer, etc.)
-- **meals** - Every meal you log with timestamp
-- **sleep_log** - Sleep and wake times
-- **weight_log** - Weight tracking
-- **exercise_log** - Workout tracking
-- **user_profile** - Your goals and preferences
+---
 
-## 🚀 Quick Start
+## 🎯 What Makes This Special?
+
+### 🤖 AI-Native Design
+
+Built specifically for LLM interactions. Claude/GPT can:
+
+- **Parse natural language** → "I ate 2 rotis" becomes `log_meal("roti:120")`
+- **Chain multiple tools** → "Show my progress" calls nutrition + sleep + weight tools
+- **Provide context-aware recommendations** → Based on time, region, pantry, goals
+
+### 🌍 Region-Aware
+
+- **India:** Roti, dal, paneer, idli, dosa, curd, samosa, etc.
+- **International:** Chicken, pasta, oatmeal, salmon, quinoa, etc.
+- Recommendations adapt to your region setting
+
+### 🧠 Smart Recommendations
+
+- **Food suggestions** based on: calories remaining, meal type, region, pantry availability
+- **Exercise recommendations** based on: sleep quality, weight goals, energy levels
+- **Time-based routines** → Different foods for morning vs evening
+
+### � Privacy-First
+
+- **100% local** - All data stays on your machine
+- **No cloud syncing** - SQLite database in your folder
+- **No tracking** - No telemetry, no API calls
+
+---
 
 ```bash
 # Install dependencies

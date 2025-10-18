@@ -1,9 +1,28 @@
 [project]
 name = "health-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Comprehensive health tracking MCP server - nutrition, sleep, exercise, weight management with AI-driven recommendations"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastmcp>=2.12.4",
 ]
+authors = [
+    {name = "Health MCP Team"}
+]
+keywords = ["mcp", "health", "nutrition", "fitness", "tracking", "ai", "wellness"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Health :: Nutrition",
+    "Topic :: Health :: Fitness",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/health-mcp"
+Documentation = "https://github.com/yourusername/health-mcp/blob/main/README.md"
+Repository = "https://github.com/yourusername/health-mcp"
+
+[tool.fastmcp]
+name = "Health Assistant"
+description = "Track meals, sleep, exercise, weight with AI recommendations"
